@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>你儂我農｜直接遇見土地的味道</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/png" href="https://storage.googleapis.com/cka101-15/form/farmLogo.png?v=20260613-transparent">
+</head>
+<body data-page="consumer" data-active-nav="home">
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="Farmily 首頁">
+      <span class="brand-seal">儂</span>
+      <span><strong>你儂我農</strong><small>from soil to table</small></span>
+    </a>
+    <button class="mobile-menu" id="mobileMenu" type="button" aria-label="開啟選單">☰</button>
+    <nav class="main-nav" id="mainNav" aria-label="消費者主要功能">
+      <div class="nav-item"><a href="news.html"       data-nav-key="news">最新消息</a></div>
+      <div class="nav-item"><a href="products.html"   data-nav-key="products">全部商品</a></div>
+      <div class="nav-item"><a href="group-buys.html" data-nav-key="group-buys">團購</a></div>
+      <div class="nav-item"><a href="farm-trips.html" data-nav-key="farm-trips">體驗活動</a></div>
+      <div class="nav-item"><a href="blogs.html"      data-nav-key="blogs">部落格</a></div>
+      <div class="user-zone" id="userZone"></div>
+    </nav>
+  </header>
+
+  <!-- ===== Vue 接管 main(header / footer 由 header.js 維持原樣) ===== -->
+  <div id="app">
+    <main>
+      <section class="hero-slider" aria-label="首頁幻燈片">
+        <div v-for="(s, i) in slides" :key="i" class="slide" :class="{ 'is-active': i === activeSlide }">
+          <div class="slide-photo" :class="s.photo"></div>
+          <div class="slide-copy">
+            <span class="eyebrow">{{ s.eyebrow }}</span>
+            <h1>{{ s.title }}</h1>
+            <p>{{ s.desc }}</p>
+            <div class="hero-actions">
+              <a class="primary-button" :href="s.primaryHref">{{ s.primaryText }}</a>
+              <a class="secondary-button" :href="s.secondaryHref">{{ s.secondaryText }}</a>
+            </div>
+            <aside class="hero-note" :class="s.noteClass">
+              <span>{{ s.noteTag }}</span>
+              <strong>{{ s.noteText }}</strong>
+            </aside>
+          </div>
+        </div>
+        <div class="slider-controls" aria-label="幻燈片控制">
+          <button v-for="(s, i) in slides" :key="i" class="slide-dot" :class="{ 'is-active': i === activeSlide }"
+                  type="button" @click="activeSlide = i" :aria-label="'第' + (i+1) + '張'"></button>
+        </div>
+      </section>
+
+      <section class="intro-strip">
+        <article><strong>友善農友</strong><p>小農自行上架與定價，平台協助曝光、訂單與客服流程。</p></article>
+        <article><strong>產地直送</strong><p>依品項選擇常溫、冷藏或冷凍配送，減少不必要的中間耗損。</p></article>
+        <article><strong>安心驗證</strong><p>保留產銷履歷、有機、友善耕作與檢驗報告欄位。</p></article>
+        <article><strong>會員服務</strong><p>支援訂單查詢、收藏、優惠券與活動報名紀錄。</p></article>
+      </section>
+
+      <section class="section-block home-section">
+        <div class="section-heading">
+          <span class="eyebrow">products</span>
+          <h2>主題分類推薦</h2>
+          <p>依照產季、料理情境與配送需求，把小農商品整理成更好逛的入口。</p>
+        </div>
+        <div class="home-section-tools">
+          <div class="category-pills"></div>
+          <a class="text-link" href="products.html">More ›</a>
+        </div>
+        <div class="showcase-grid">
+          <div class="empty-state" style="grid-column:1/-1;margin:0;">商品功能由其他組員負責，敬請期待。</div>
+        </div>
+      </section>
+
+      <section class="section-block home-section experience-section">
+        <div class="section-heading">
+          <span class="eyebrow">farm trips</span>
+          <h2>體驗活動</h2>
+          <p>採收、參訪、手作課與農村小旅行，讓消費者面對面認識產地。</p>
+        </div>
+        <div class="showcase-grid">
+          <div v-if="trips.length" style="display:contents">
+            <article v-for="t in trips" :key="t.farmTripId || t.id">
+              <h3><a :href="'farm-trip-detail.html?id=' + (t.farmTripId || t.id)">{{ t.title || t.farmTripTitle }}</a></h3>
+              <p>{{ truncate(t.description || t.farmTripContent, 80) }}</p>
+            </article>
+          </div>
+          <div v-else class="empty-state" style="grid-column:1/-1;margin:0;">體驗活動即將開放，敬請期待。</div>
+        </div>
+        <div class="section-more"><a class="primary-button" href="farm-trips.html">看所有活動</a></div>
+      </section>
+
+      <section class="section-block home-section news-section">
+        <div class="section-heading">
+          <span class="eyebrow">news</span>
+          <h2>最新消息</h2>
+          <p>產季預購、平台公告與活動通知，都在這裡快速追蹤。</p>
+        </div>
+        <div class="news-grid">
+          <div class="empty-state" style="grid-column:1/-1;margin:0;">最新消息由其他組員負責，敬請期待。</div>
+        </div>
+        <div class="section-more"><a class="secondary-button" href="news.html">看所有消息</a></div>
+      </section>
+
+      <section class="journal-section home-section">
+        <div class="section-heading">
+          <span class="eyebrow">blog</span>
+          <h2>部落格</h2>
+          <p>把蔬果知識、食譜與產地故事放在購物流程旁邊，增加停留與回訪。</p>
+        </div>
+        <p v-if="blogLoading" style="text-align:center;color:var(--muted)">載入中…</p>
+        <div v-else-if="blogs.length" class="journal-grid">
+          <article v-for="b in blogs" :key="b.blogId">
+            <h3><a :href="'blog-detail.html?id=' + b.blogId">{{ b.blogTitle }}</a></h3>
+            <p>{{ truncate(b.blogContent, 100) }}</p>
+            <div class="card-meta" style="margin-top:10px">
+              <span>{{ fmtTime(b.blogTime) }}</span>
+              <span>♡ {{ b.blogLikeCount || 0 }}</span>
+            </div>
+          </article>
+        </div>
+        <div v-else class="journal-grid">
+          <div class="empty-state" style="grid-column:1/-1;margin:0;">目前還沒有文章。</div>
+        </div>
+        <div class="section-more"><a class="primary-button" href="blogs.html">看所有文章</a></div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div><strong>你儂我農</strong><p>CKA101 第三組專題</p></div>
+    <div class="footer-links">
+      <a href="news.html">最新消息</a><a href="products.html">全部商品</a><a href="group-buys.html">團購</a>
+      <a href="farm-trips.html">體驗活動</a><a href="blogs.html">部落格</a><a href="login.html">登入 / 註冊</a>
+    </div>
+  </footer>
+
+  <script src="js/auth.js"></script>
+  <script src="js/header.js"></script>
+  <script src="js/vue.global.js"></script>
+  <script>
+    Vue.createApp({
+      data() {
+        return {
+          activeSlide: 0,
+          timer: null,
+          slides: [
+            { photo: "photo-hero-main", eyebrow: "farm experience",
+              title: "到田裡走一趟，理解一口飯的來處。",
+              desc: "從採收、料理到餐桌，讓每一次購買都能看見土地與生產者。",
+              primaryText: "預約體驗活動", primaryHref: "farm-trips.html",
+              secondaryText: "逛當季商品", secondaryHref: "products.html",
+              noteTag: "本週推薦", noteText: "食農小旅行與產地採收體驗開放報名", noteClass: "" },
+            { photo: "photo-hero-market", eyebrow: "weekly harvest",
+              title: "本週旬味上架，從產地直送餐桌。",
+              desc: "依季節挑選蔬果、米糧與加工品，減少中間耗損，把新鮮留給你。",
+              primaryText: "看精選商品", primaryHref: "products.html",
+              secondaryText: "一起開團", secondaryHref: "group-buys.html",
+              noteTag: "產地直送", noteText: "小農自行定價，平台協助曝光與訂單服務", noteClass: "" },
+            { photo: "photo-hero-deal", eyebrow: "special picks",
+              title: "當季好物與團購優惠，一眼挑好。",
+              desc: "把限量、預購、惜福與禮盒整理成清楚入口，讓消費者更快找到需要的農產。",
+              primaryText: "查看特價推薦", primaryHref: "products.html",
+              secondaryText: "看最新公告", secondaryHref: "news.html",
+              noteTag: "本週特價", noteText: "產季商品、團購組合與活動公告集中更新", noteClass: "is-deal" },
+            { photo: "photo-hero-journal", eyebrow: "blog",
+              title: "部落格，把產地故事帶回家。",
+              desc: "用食譜、蔬果知識與農家日誌，讓購物不只停在下單，也留下理解與回訪。",
+              primaryText: "閱讀推薦文章", primaryHref: "blogs.html",
+              secondaryText: "追蹤最新消息", secondaryHref: "news.html",
+              noteTag: "推薦閱讀", noteText: "食譜、產地日記與農業小知識每週更新", noteClass: "" }
+          ],
+          blogs: [], blogLoading: true, trips: []
+        };
+      },
+      methods: {
+        nextSlide() { this.activeSlide = (this.activeSlide + 1) % this.slides.length; },
+        async loadBlogs() {
+          this.blogLoading = true;
+          try {
+            const res = await fetch("/blogs");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            const list = Array.isArray(data) ? data : (data.results || data.content || []);
+            this.blogs = list.slice(0, 3);
+          } catch (e) { this.blogs = []; }
+          finally { this.blogLoading = false; }
+        },
+        async loadTrips() {
+          try {
+            const res = await fetch("/farm_trips");
+            if (!res.ok) return;
+            const data = await res.json();
+            const list = Array.isArray(data) ? data : (data.results || data.content || []);
+            this.trips = list.slice(0, 3);
+          } catch (e) { /* 還沒開放 */ }
+        },
+        truncate(s, n) { s = String(s || "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n) + "…" : s; },
+        fmtTime(t) { return t ? String(t).slice(0, 16) : ""; }
+      },
+      mounted() {
+        this.loadBlogs();
+        this.loadTrips();
+        this.timer = setInterval(this.nextSlide, 5000);
+      },
+      unmounted() { clearInterval(this.timer); }
+    }).mount("#app");
+  </script>
+</body>
+</html>

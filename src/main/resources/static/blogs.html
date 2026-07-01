@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>部落格｜你儂我農</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/png" href="https://storage.googleapis.com/cka101-15/form/farmLogo.png?v=20260613-transparent">
+</head>
+<body data-page="consumer" data-active-nav="blogs">
+  <!-- 原本的 header markup,header.js 會在執行時正規化成與原站一致的導覽列 -->
+  <header class="site-header">
+    <a class="brand" href="index.html"><span class="brand-seal">儂</span><span><strong>你儂我農</strong><small>from soil to table</small></span></a>
+    <button class="mobile-menu" id="mobileMenu" type="button" aria-label="開啟選單">☰</button>
+    <nav class="main-nav" id="mainNav">
+      <div class="nav-item"><a href="index.html"      data-nav-key="home">首頁</a></div>
+      <div class="nav-item"><a href="products.html"   data-nav-key="products">全部商品</a></div>
+      <div class="nav-item"><a href="group-buys.html" data-nav-key="group-buys">團購</a></div>
+      <div class="nav-item"><a href="farm-trips.html" data-nav-key="farm-trips">體驗活動</a></div>
+      <div class="nav-item"><a href="blogs.html"      data-nav-key="blogs">部落格</a></div>
+      <div class="nav-item"><a href="farm-map.html"   data-nav-key="farm-map">產地地圖</a></div>
+      <div class="user-zone" id="userZone"></div>
+    </nav>
+  </header>
+
+  <section class="page-header">
+    <span class="eyebrow">blog</span>
+    <h1>部落格</h1>
+    <p>把蔬果知識、食譜與產地故事放在購物流程旁邊，增加停留與回訪。</p>
+  </section>
+
+  <!-- ===== Vue 只接管中間內容,header / footer 維持原本 ===== -->
+  <div id="app">
+    <div class="toolbar">
+      <div class="category-pills">
+        <button type="button" class="category-pill" :class="{ 'is-active': activeTypeId === null }" @click="activeTypeId = null">全部</button>
+        <button type="button" v-for="p in typePills" :key="p.id"
+                class="category-pill" :class="{ 'is-active': activeTypeId === p.id }"
+                @click="activeTypeId = p.id">{{ p.name }}</button>
+      </div>
+      <form class="search" role="search" @submit.prevent>
+        <input type="search" v-model="keyword" placeholder="搜尋文章…" aria-label="搜尋">
+        <button class="secondary-button" type="submit">搜尋</button>
+      </form>
+    </div>
+
+    <main class="section-block" style="padding-top:0">
+      <div class="journal-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <p v-if="loading" style="grid-column:1/-1;color:var(--muted);text-align:center;">載入中…</p>
+        <div v-else-if="error" class="empty-state" style="grid-column:1/-1;margin:0;">文章載入失敗：{{ error }}</div>
+        <div v-else-if="filteredBlogs.length === 0" class="empty-state" style="grid-column:1/-1;margin:0;">沒有符合的文章。</div>
+        <template v-else>
+          <article v-for="b in filteredBlogs" :key="b.blogId">
+            <span>{{ typeName(b.blogTypeId) || ('分類 ' + b.blogTypeId) }}</span>
+            <h3><a :href="'blog-detail.html?id=' + b.blogId">{{ b.blogTitle }}</a></h3>
+            <p>{{ truncate(b.blogContent, 100) }}</p>
+            <div class="card-meta" style="margin-top:10px">
+              <span>{{ fmtTime(b.blogTime) }}</span>
+              <span>♡ {{ b.blogLikeCount || 0 }}</span>
+            </div>
+          </article>
+        </template>
+      </div>
+    </main>
+  </div>
+
+  <!-- 原本的 footer,header.js 會替換成原站的山景 footer -->
+  <footer class="site-footer">
+    <div><strong>你儂我農</strong><p>CKA101 第三組專題</p></div>
+    <div class="footer-links">
+      <a href="index.html">首頁</a><a href="products.html">全部商品</a><a href="group-buys.html">團購</a><a href="farm-trips.html">體驗活動</a>
+    </div>
+  </footer>
+
+  <script src="js/auth.js"></script>
+  <script src="js/header.js"></script>
+  <script src="js/vue.global.js"></script>
+  <script>
+    Vue.createApp({
+      data() {
+        return { blogs: [], types: [], activeTypeId: null, keyword: "", loading: true, error: "" };
+      },
+      computed: {
+        typePills() {
+          return this.types.map(t => ({ id: t.blogTypeId ?? t.id, name: t.blogTypeName ?? t.name }));
+        },
+        filteredBlogs() {
+          const kw = this.keyword.trim();
+          return this.blogs.filter(b => {
+            const okType = this.activeTypeId === null || b.blogTypeId === this.activeTypeId;
+            const okKw = !kw || (b.blogTitle || "").includes(kw) || (b.blogContent || "").includes(kw);
+            return okType && okKw;
+          });
+        }
+      },
+      methods: {
+        async loadBlogs() {
+          this.loading = true; this.error = "";
+          try {
+            const res = await fetch("/blogs");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            this.blogs = Array.isArray(data) ? data : (data.results || data.content || []);
+          } catch (e) { this.error = e.message; }
+          finally { this.loading = false; }
+        },
+        async loadTypes() {
+          try {
+            const res = await fetch("/blog_types");
+            if (!res.ok) return;
+            const data = await res.json();
+            this.types = Array.isArray(data) ? data : [];
+          } catch (e) { /* 選用 */ }
+        },
+        typeName(id) { const p = this.typePills.find(x => x.id === id); return p ? p.name : ""; },
+        truncate(s, n) { s = String(s || "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n) + "…" : s; },
+        fmtTime(t) { return t ? String(t).slice(0, 16) : ""; }
+      },
+      mounted() { this.loadTypes(); this.loadBlogs(); }
+    }).mount("#app");
+  </script>
+</body>
+</html>

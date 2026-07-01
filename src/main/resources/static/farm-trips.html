@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>體驗活動｜你儂我農</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="icon" type="image/png" href="https://storage.googleapis.com/cka101-15/form/farmLogo.png?v=20260613-transparent">
+</head>
+<body data-page="consumer" data-active-nav="farm-trips">
+  <header class="site-header">
+    <a class="brand" href="index.html"><span class="brand-seal">儂</span><span><strong>你儂我農</strong><small>from soil to table</small></span></a>
+    <button class="mobile-menu" id="mobileMenu" type="button" aria-label="開啟選單">☰</button>
+    <nav class="main-nav" id="mainNav">
+      <div class="nav-item"><a href="index.html"      data-nav-key="home">首頁</a></div>
+      <div class="nav-item"><a href="products.html"   data-nav-key="products">全部商品</a></div>
+      <div class="nav-item"><a href="group-buys.html" data-nav-key="group-buys">團購</a></div>
+      <div class="nav-item"><a href="farm-trips.html" data-nav-key="farm-trips">體驗活動</a></div>
+      <div class="nav-item"><a href="blogs.html"      data-nav-key="blogs">部落格</a></div>
+      <div class="user-zone" id="userZone"></div>
+    </nav>
+  </header>
+
+  <section class="page-header">
+    <span class="eyebrow">farm experience</span>
+    <h1>體驗活動</h1>
+    <p>採果、插秧、果醬課與農村小旅行；報名後到田裡走一趟。</p>
+  </section>
+
+  <div id="app">
+    <div class="toolbar">
+      <div class="category-pills"></div>
+    </div>
+
+    <main class="section-block" style="padding-top:0">
+      <div class="product-grid">
+        <p v-if="loading" style="grid-column:1/-1;color:var(--muted);text-align:center;">載入中…</p>
+        <div v-else-if="error" class="empty-state" style="grid-column:1/-1;margin:0;">
+          體驗活動即將開放，敬請期待。<br>
+          <small style="color:var(--muted)">(後端 /farm_trips 尚未建立)</small>
+        </div>
+        <div v-else-if="trips.length === 0" class="empty-state" style="grid-column:1/-1;margin:0;">目前沒有活動。</div>
+        <template v-else>
+          <article v-for="t in trips" :key="t.farmTripId || t.id">
+            <h3><a :href="'farm-trip-detail.html?id=' + (t.farmTripId || t.id)">{{ t.title || t.farmTripTitle }}</a></h3>
+            <p>{{ truncate(t.description || t.farmTripContent, 90) }}</p>
+            <div class="card-meta" style="margin-top:10px">
+              <span>{{ t.location || t.farmTripPlace || "" }}</span>
+              <span v-if="t.price != null">NT$ {{ t.price }}</span>
+            </div>
+          </article>
+        </template>
+      </div>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div><strong>你儂我農</strong><p>CKA101 第三組專題</p></div>
+    <div class="footer-links">
+      <a href="index.html">首頁</a><a href="products.html">全部商品</a><a href="group-buys.html">團購</a><a href="blogs.html">部落格</a>
+    </div>
+  </footer>
+
+  <script src="js/auth.js"></script>
+  <script src="js/header.js"></script>
+  <script src="js/vue.global.js"></script>
+  <script>
+    Vue.createApp({
+      data() { return { trips: [], loading: true, error: "" }; },
+      methods: {
+        async loadTrips() {
+          this.loading = true; this.error = "";
+          try {
+            const res = await fetch("/farm_trips");
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            this.trips = Array.isArray(data) ? data : (data.results || data.content || []);
+          } catch (e) { this.error = e.message; }
+          finally { this.loading = false; }
+        },
+        truncate(s, n) { s = String(s || "").replace(/\s+/g, " "); return s.length > n ? s.slice(0, n) + "…" : s; }
+      },
+      mounted() { this.loadTrips(); }
+    }).mount("#app");
+  </script>
+</body>
+</html>
