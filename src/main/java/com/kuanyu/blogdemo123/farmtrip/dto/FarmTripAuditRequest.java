@@ -1,6 +1,8 @@
 package com.kuanyu.blogdemo123.farmtrip.dto;
 
 import com.kuanyu.blogdemo123.farmtrip.entity.FarmTripAuditStatus;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 /**
  * 審核的「請求」DTO（管理員送進來）。
@@ -12,8 +14,13 @@ import com.kuanyu.blogdemo123.farmtrip.entity.FarmTripAuditStatus;
  */
 public class FarmTripAuditRequest {
 
+    @NotNull
     private Integer adminId;
+
+    @NotNull
     private FarmTripAuditStatus status;
+
+    @Size(max = 255)
     private String reason;
 
     public FarmTripAuditRequest() {

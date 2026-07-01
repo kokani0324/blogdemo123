@@ -3,6 +3,13 @@
 > 看法：**一次只看一節**。每一節都是一條完整請求，從前端打進來，一路經過哪個方法、做了什麼、怎麼回傳，全部串起來。
 > 共通結構都是：`前端 → Controller 方法 → Service 方法 → Repository 方法 → 資料庫`，再原路包成回應回去。
 
+> ### ⚠️ 架構已更新（2026-07 對齊 farm-platform）
+> 本文部分程式片段是「舊版（controller 做轉換）」的示意。現行架構改成：
+> - **Controller 只轉發**：收 `XxxRequest`（加 `@Valid` 自動驗證）→ 直接呼叫 service → 回 service 給的 `XxxResponse`。controller 不再自己做 DTO↔entity 轉換。
+> - **Service 吃 `XxxRequest`、回 `XxxResponse`**：`Request→entity` 與 `entity→Response`（`XxxResponse.from()`）都在 service 內完成。
+> - 所以下面每條若看到「controller 裡做轉換」或「service 回傳 entity」，請理解為**現在那段轉換是在 service 裡、回傳的是 Response DTO**。流程的「呼叫關係」不變，只是轉換的位置換了一層。
+> - 已完整更新的範例見第 [4](#4)、[5](#5) 條。
+
 ## 怎麼挑你要看的那一條
 
 | # | 請求 | 白話 |
@@ -221,71 +228,80 @@ POST /farm-trips/5001/comments
 body: { "userId":1, "star":4, "content":"很好玩" }
 ```
 
-### 流程（注意這裡 service 做了「兩件事」）
+### 流程（現行架構：controller 只轉發，轉換在 service）
 
 ```
-前端 ──POST + JSON──▶ FarmTripController.addComment(id=5001, comment)
-                          │
-                          ▼ farmTripService.addComment(5001, comment)
+前端 ──POST + JSON──▶ FarmTripController.addComment(id=5001, request)
+                          │ @Valid 先驗證 request（star 1~5、content 長度…）
+                          ▼ farmTripService.addComment(5001, request)   ← 傳 Request DTO
                      ServiceImpl.addComment()  【@Transactional 包住整段】
                           │
                           ├─① 先確認活動存在：farmTripRepository.findById(5001)
                           │
-                          ├─② 寫評論：
-                          │     comment.setFarmTripId(5001)
-                          │     comment.setCreatedAt(現在)
+                          ├─② Request → entity + 寫評論：
+                          │     comment.setUserId(request.getUserId())
+                          │     comment.setStar(request.getStar())
+                          │     comment.setFarmTripId(5001)      ← 網址帶的
+                          │     comment.setCreatedAt(現在)        ← 後端給
                           │     farmTripCommentRepository.save(comment)
                           │     → DB: INSERT INTO farm_trip_comment ...
                           │
-                          └─③ 回寫活動統計：
-                                trip.commentNumbers += 1
-                                trip.starNumbers   += 4
-                                farmTripRepository.save(trip)
-                                → DB: UPDATE farm_trip SET comment_numbers=?, star_numbers=? ...
-                          │ 回傳剛存好的 comment
-                          ▲
-                     Controller: ResponseEntity.ok(savedComment) → 200
+                          ├─③ 回寫活動統計：
+                          │     trip.commentNumbers += 1
+                          │     trip.starNumbers   += 4
+                          │     farmTripRepository.save(trip)
+                          │     → DB: UPDATE farm_trip SET comment_numbers=?, star_numbers=? ...
+                          │
+                          └─④ entity → Response：FarmTripCommentResponse.from(saved)
+                          ▲ 回傳 Response DTO
+                     Controller: ResponseEntity.ok(response) → 200
 ```
 
 ### 一層一層看
 
-**① Controller**
+**① Controller**（薄，只轉發）
 ```java
 @PostMapping("/{id}/comments")
-public ResponseEntity<FarmTripComment> addComment(@PathVariable Integer id,
-                                                  @RequestBody FarmTripComment comment) {
-    return ResponseEntity.ok(farmTripService.addComment(id, comment));
+public ResponseEntity<FarmTripCommentResponse> addComment(@PathVariable Integer id,
+                                                          @Valid @RequestBody FarmTripCommentRequest request) {
+    return ResponseEntity.ok(farmTripService.addComment(id, request));
 }
 ```
-- `@RequestBody FarmTripComment comment`：把前端送來的 JSON **自動轉成** `FarmTripComment` 物件。
+- `@Valid @RequestBody FarmTripCommentRequest request`：JSON 轉成 Request DTO，且**先驗證**（`star` 必填且 1~5、`content` ≤255）。錯的直接回 **400**，根本進不到 service。
+- controller **不做任何轉換**，直接把 request 丟給 service、回 service 給的 Response。
 
-**② Service**（重點在「一次動兩張表」）
+**② Service**（轉換 + 一次動兩張表都在這）
 ```java
 @Transactional
-public FarmTripComment addComment(Integer tripId, FarmTripComment comment) {
+public FarmTripCommentResponse addComment(Integer tripId, FarmTripCommentRequest request) {
     FarmTrip trip = getOrThrow(farmTripRepository.findById(tripId), "體驗活動不存在: " + tripId);
 
-    // 1) 寫評論
+    // 1) Request → entity + 寫評論
+    FarmTripComment comment = new FarmTripComment();
     comment.setFarmTripId(tripId);
+    comment.setUserId(request.getUserId());
+    comment.setStar(request.getStar());
+    comment.setContent(request.getContent());
     comment.setCreatedAt(LocalDateTime.now());
     FarmTripComment saved = farmTripCommentRepository.save(comment);
 
     // 2) 回寫活動統計
     int count = trip.getCommentNumbers() == null ? 0 : trip.getCommentNumbers();
     int stars = trip.getStarNumbers()    == null ? 0 : trip.getStarNumbers();
-    int addStar = comment.getStar() == null ? 0 : comment.getStar();
+    int addStar = request.getStar() == null ? 0 : request.getStar();
     trip.setCommentNumbers(count + 1);
     trip.setStarNumbers(stars + addStar);
     farmTripRepository.save(trip);
 
-    return saved;
+    // 3) entity → Response
+    return FarmTripCommentResponse.from(saved);
 }
 ```
-- **`@Transactional` 的意義**：第 2 步和第 3 步必須一起成功。如果評論寫了、統計卻更新失敗，交易會**整個回滾**，當作沒發生 → 不會出現「有評論但統計沒加」的髒資料。
-- 為什麼要維護 `comment_numbers / star_numbers`？前端算平均星數時，直接 `star_numbers ÷ comment_numbers` 就好，不用每次把所有評論撈出來重算。
+- **`@Transactional`**：寫評論、回寫統計兩步必須一起成功，否則整個回滾 → 不會有「有評論但統計沒加」的髒資料。
+- 為什麼維護 `comment_numbers / star_numbers`？前端算平均直接 `star_numbers ÷ comment_numbers`，不用每次把所有評論撈出來重算。
 
 ### 白話總結
-發評論不是只存一筆 → service 先確認活動在，再「存評論 + 把活動的評論數/星數加上去」兩步一起做（交易保護）→ 回傳存好的評論。
+controller 收 Request（先 `@Valid`）→ 丟給 service → service 把 Request 轉成 entity、存評論、回寫統計（交易保護）、再轉成 Response 回傳 → controller 包 200。轉換與邏輯全在 service。
 
 ---
 
@@ -298,49 +314,45 @@ POST /farm-trips/sessions/6001/orders
 body: { "userId":1, "numPeople":2, "userName":"小明", "userPhoneNum":"0900000000" }
 ```
 
-### 流程（service 裡有「擋名額」的判斷）
+### 流程（現行架構：controller 只轉發，service 擋名額 + 轉換）
 
 ```
-前端 ──POST + JSON──▶ FarmTripController.bookSession(sessionId=6001, order)
-                          │
-                          ▼ farmTripService.bookSession(6001, order)
+前端 ──POST + JSON──▶ FarmTripController.bookSession(sessionId=6001, request)
+                          │ @Valid 先驗證 request（numPeople≥1、userName/phone 必填…）
+                          ▼ farmTripService.bookSession(6001, request)   ← 傳 Request DTO
                      ServiceImpl.bookSession()  【@Transactional】
                           │
                           ├─① 場次要存在：sessionRepository.findById(6001)
-                          │
                           ├─② 場次必須 ACTIVE，否則丟例外「此場次無法預約」
-                          │
-                          ├─③ 算已佔名額：
-                          │     orderRepository.findByFarmSessionId(6001)
+                          ├─③ 算已佔名額：findByFarmSessionId(6001)
                           │     → 只加總 status=CONFIRMED 的 numPeople
-                          │     若 已佔 + 這次人數 > 上限 → 丟例外「名額不足」
-                          │
-                          └─④ 通過 → 建立訂單：
-                                order.setStatus(CONFIRMED)
-                                order.setBookedAt(現在)
-                                orderRepository.save(order)
-                                → DB: INSERT INTO farm_trip_order ...
-                          │ 回傳存好的 order
-                          ▲
-                     Controller: ResponseEntity.ok(order) → 200
+                          │     若 已佔 + request.numPeople > 上限 → 丟例外「名額不足」
+                          ├─④ 通過 → Request→entity 建立訂單：
+                          │     order.setUserId/NumPeople/...(request 各欄位)
+                          │     order.setStatus(CONFIRMED)、setBookedAt(現在)
+                          │     orderRepository.save(order) → INSERT
+                          └─⑤ entity → Response：FarmTripOrderResponse.from(saved)
+                          ▲ 回傳 Response DTO
+                     Controller: ResponseEntity.ok(response) → 200
                      （若中途丟例外 → 目前回 500）
 ```
 
 ### 一層一層看
 
-**① Controller**
+**① Controller**（薄，只轉發）
 ```java
 @PostMapping("/sessions/{sessionId}/orders")
-public ResponseEntity<FarmTripOrder> bookSession(@PathVariable Integer sessionId,
-                                                 @RequestBody FarmTripOrder order) {
-    return ResponseEntity.ok(farmTripService.bookSession(sessionId, order));
+public ResponseEntity<FarmTripOrderResponse> bookSession(@PathVariable Integer sessionId,
+                                                         @Valid @RequestBody FarmTripOrderRequest request) {
+    return ResponseEntity.ok(farmTripService.bookSession(sessionId, request));
 }
 ```
+- `@Valid`：先驗證 `numPeople≥1`、`userName`/`userPhoneNum` 必填等，錯的回 400。
 
-**② Service**（這支是整個模組最有料的邏輯）
+**② Service**（整個模組最有料的邏輯 + Request→entity + entity→Response）
 ```java
 @Transactional
-public FarmTripOrder bookSession(Integer sessionId, FarmTripOrder order) {
+public FarmTripOrderResponse bookSession(Integer sessionId, FarmTripOrderRequest request) {
     FarmTripSession session = getOrThrow(
         farmTripSessionRepository.findById(sessionId), "場次不存在: " + sessionId);
 
@@ -351,28 +363,37 @@ public FarmTripOrder bookSession(Integer sessionId, FarmTripOrder order) {
 
     // 名額檢查：只算 CONFIRMED 訂單的人數加總
     Integer cap = session.getAttendance();
+    int incoming = request.getNumPeople() == null ? 0 : request.getNumPeople();
     if (cap != null) {
         int booked = farmTripOrderRepository.findByFarmSessionId(sessionId).stream()
                 .filter(o -> o.getStatus() == FarmTripOrderStatus.CONFIRMED)
                 .mapToInt(o -> o.getNumPeople() == null ? 0 : o.getNumPeople())
                 .sum();
-        int incoming = order.getNumPeople() == null ? 0 : order.getNumPeople();
         if (booked + incoming > cap) {
             throw new IllegalStateException("名額不足，剩餘 " + (cap - booked) + " 位");
         }
     }
 
+    // Request → entity
+    FarmTripOrder order = new FarmTripOrder();
     order.setFarmSessionId(sessionId);
+    order.setUserId(request.getUserId());
+    order.setNumPeople(request.getNumPeople());
+    order.setUserName(request.getUserName());
+    order.setUserPhoneNum(request.getUserPhoneNum());
+    order.setNote(request.getNote());
     order.setStatus(FarmTripOrderStatus.CONFIRMED);
     order.setBookedAt(LocalDateTime.now());
-    return farmTripOrderRepository.save(order);
+
+    // entity → Response
+    return FarmTripOrderResponse.from(farmTripOrderRepository.save(order));
 }
 ```
-- **第 ③ 步只數 `CONFIRMED`**：這是關鍵，因為被取消的訂單（`CANCELLED`）就自動不佔名額了（見第 7 條）。
-- **`@Transactional`**：避免兩個人同時搶最後一個名額時都算到「還有位」而超賣。
+- **第 ③ 步只數 `CONFIRMED`**：被取消的訂單（`CANCELLED`）自動不佔名額（見第 7 條）。
+- **`@Transactional`**：避免兩人同時搶最後一個名額時都算到「還有位」而超賣。
 
 ### 白話總結
-預約要過三關：場次在不在 → 是不是開放中 → 名額夠不夠（只算已確認的）。三關都過才真的建立訂單。任何一關不過就丟例外（目前會變 500）。
+controller 收 Request（先 `@Valid`）→ 丟給 service。service 過三關（場次在不在 → 是不是開放中 → 名額夠不夠，只算已確認的）→ 通過才把 Request 轉成 entity 建立訂單 → 轉成 Response 回傳。
 
 ---
 

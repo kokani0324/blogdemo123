@@ -1,6 +1,8 @@
 package com.kuanyu.blogdemo123.farmtrip.dto;
 
 import com.kuanyu.blogdemo123.farmtrip.entity.FarmTripSessionStatus;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDateTime;
 
@@ -15,11 +17,18 @@ import java.time.LocalDateTime;
  */
 public class FarmTripSessionRequest {
 
+    @NotNull
     private LocalDateTime farmTripStart;
+
+    @NotNull
     private LocalDateTime farmTripEnd;
+
     private LocalDateTime tripBookStart;
     private LocalDateTime tripBookEnd;
+
+    @Min(1)
     private Integer attendance;
+
     private FarmTripSessionStatus sessionStatus;
 
     public FarmTripSessionRequest() {

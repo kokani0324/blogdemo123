@@ -53,6 +53,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
         <!-- 暫時註解掉：此依賴會帶入 Jackson 2.20，與 Spring Boot 4 的 Jackson 3 衝突，導致啟動失敗。
              等之後真的要用 GCP 雲端儲存、且 spring-cloud-gcp 對 Boot 4 相容後再打開。
         <dependency>

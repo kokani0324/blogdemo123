@@ -7,15 +7,18 @@
 
 ## 0. 先看懂分層架構
 
+> 架構已對齊參考專案（farm-platform）：**DTO ↔ entity 的轉換都在 service 層**，
+> controller 只轉發、不碰 entity。前端進出一律用 DTO。
+
 資料流是一條龍：
 
 ```
-前端 HTTP 請求
-   ↓
-Controller   只做「轉接」：收請求 → 呼叫 service → 包成 HTTP 回應
-   ↓
-Service      所有「商業邏輯」：規則判斷、跨表協調、多步驟交易
-   ↓
+前端 HTTP 請求 (JSON)
+   ↓  收 XxxRequest（@Valid 自動驗證，錯的回 400）
+Controller   只做「轉發」：把 Request 丟給 service → 回 service 給的 Response
+   ↓  傳 XxxRequest
+Service      商業邏輯 + 轉換：Request→entity、跑規則、entity→Response
+   ↓  用 entity 操作
 Repository   只做「撈/存資料」：findBy... / save / delete
    ↓
 資料庫 (MySQL: farmily)
@@ -25,10 +28,16 @@ Repository   只做「撈/存資料」：findBy... / save / delete
 
 | 層 | 只負責一件事 |
 |---|---|
-| Controller | 把 HTTP 請求轉給 service，把結果包成回應（薄薄一層） |
-| Service | 「該怎麼做」的判斷與規則（厚的一層，邏輯都在這） |
+| Controller | 收 Request DTO（`@Valid`）→ 轉發給 service → 回 Response DTO（薄薄一層，不碰 entity） |
+| Service | 「該怎麼做」的判斷與規則 + **DTO↔entity 轉換**（厚的一層，邏輯都在這） |
 | Repository | 「怎麼撈資料」（繼承 JpaRepository，幾乎不用寫實作） |
-| Entity | 對應資料表的一筆資料長什麼樣 |
+| Entity | 對應資料表的一筆資料，只在 service / repository 內部流動 |
+| DTO | 對前端的語言：`XxxRequest`（進來）/ `XxxResponse`（出去），放 `farmtrip/dto/` |
+
+**轉換寫在哪**：
+- `Request → entity`：service 內部的私有方法（如 `toSessionEntity`）或直接在方法裡 set。
+- `entity → Response`：各 `XxxResponse` 的靜態 `from(entity)`，由 service 呼叫。
+- controller 兩者都不碰。
 
 ---
 
@@ -276,14 +285,20 @@ App 啟動成功（port 8080，連 `farmily` DB），以下皆通過：
 
 ---
 
-## 7. 已知限制 / 之後要補（誠實列出）
+## 7. 已完成 & 已知限制
 
-1. **「目前登入者」尚未處理**：`farmerId`/`userId` 暫用 `@RequestParam` 帶。⚠️ 有登入機制後必須改成從 token/session 取得，**不能讓前端自己宣稱「我是 3 號小農」**（這是安全漏洞）。
+### ✅ 已完成（對齊參考專案）
+- **全面 DTO**：所有對外 API 進出都用 `XxxRequest` / `XxxResponse`，不再外露 entity。
+- **service 層轉換**：DTO↔entity 轉換全在 service，controller 只轉發。
+- **Bean Validation**：Request DTO 加 `@NotNull/@NotBlank/@Size/@Min/@Max`，controller `@Valid`，前端傳錯自動回 **400**。
+
+### ⚠️ 已知限制 / 之後要補（誠實列出）
+1. **「目前登入者」尚未處理**：`farmerId`/`userId`/`adminId` 暫用 `@RequestParam` 或 DTO 帶。⚠️ 有登入機制後必須改成從 token/session 取得，**不能讓前端自己宣稱「我是 3 號小農」**（這是安全漏洞）。
 2. **權限未控管**：目前誰都能呼叫 admin 的審核 API。
-3. **例外處理粗糙**：邏輯錯誤（名額不足、找不到）目前會回 HTTP 500。建議加一個全域 `@RestControllerAdvice`，把「名額不足」→ 400、「找不到」→ 404，回應才漂亮。
-4. **request body 還是 entity**：之後建議換成 DTO，把「目前登入者」這類欄位擋在外面、也能做欄位驗證。
-5. **刪除場次未防外鍵**：`DELETE /farmer/sessions/{id}` 若該場次底下已有訂單，會違反外鍵約束而報 500。應先檢查「有訂單就不准刪」或改為「軟刪除」（把 sessionStatus 設成 CANCELLED）。
-6. **沒有「查場次」公開 endpoint**：目前會員端看不到某活動的場次清單，預約前需要場次 id。之後應補一條 `GET /farm-trips/{id}/sessions`。
+3. **例外處理粗糙**：商業邏輯錯誤（名額不足、找不到）目前會回 HTTP 500。建議加一個全域 `@RestControllerAdvice`，把「名額不足」→ 400、「找不到」→ 404，回應才漂亮。（欄位格式的錯誤已由 `@Valid` 處理成 400。）
+4. **刪除場次未防外鍵**：`DELETE /farmer/sessions/{id}` 若該場次底下已有訂單，會違反外鍵約束而報 500。應先檢查「有訂單就不准刪」或改為「軟刪除」（把 sessionStatus 設成 CANCELLED）。
+5. **沒有「查場次」公開 endpoint**：目前會員端看不到某活動的場次清單，預約前需要場次 id。之後應補一條 `GET /farm-trips/{id}/sessions`。
+6. **service 是 interface + impl 拆分**（參考專案是單一 class）。維持 blogdemo123 既有 `BlogService` 慣例，兩種皆可。
 
 ---
 
@@ -301,6 +316,12 @@ farmtrip/
 │   ├── FarmTripAudit.java + FarmTripAuditStatus
 │   ├── FarmTripOrder.java + FarmTripOrderStatus
 │   └── FarmTripComment.java
+├── dto/                                對前端的 Request/Response（含 @Valid 驗證、from() 轉換）
+│   ├── FarmTripRequest / FarmTripResponse
+│   ├── FarmTripSessionRequest / FarmTripSessionResponse
+│   ├── FarmTripOrderRequest / FarmTripOrderResponse
+│   ├── FarmTripCommentRequest / FarmTripCommentResponse
+│   └── FarmTripAuditRequest / FarmTripAuditResponse
 ├── repository/
 │   ├── FarmTripRepository.java          findByStatus / findByFarmerId
 │   ├── FarmTripSessionRepository.java   findByFarmTripId
@@ -308,6 +329,6 @@ farmtrip/
 │   ├── FarmTripOrderRepository.java     findByUserId... / findByFarmSessionId / 【B方案 @Query】
 │   └── FarmTripCommentRepository.java   findByFarmTripIdOrderByCreatedAtDesc
 └── service/
-    ├── FarmTripService.java             介面
-    └── impl/FarmTripServiceImpl.java    實作（所有商業邏輯）
+    ├── FarmTripService.java             介面（吃 Request、回 Response）
+    └── impl/FarmTripServiceImpl.java    實作（商業邏輯 + DTO↔entity 轉換）
 ```

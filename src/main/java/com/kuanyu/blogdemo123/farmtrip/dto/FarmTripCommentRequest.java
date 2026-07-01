@@ -1,5 +1,10 @@
 package com.kuanyu.blogdemo123.farmtrip.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+
 /**
  * 發表評論的「請求」DTO（會員送進來）。
  *
@@ -10,8 +15,15 @@ package com.kuanyu.blogdemo123.farmtrip.dto;
  */
 public class FarmTripCommentRequest {
 
+    @NotNull
     private Integer userId;
+
+    @NotNull
+    @Min(1)
+    @Max(5)
     private Integer star;
+
+    @Size(max = 255)
     private String content;
 
     public FarmTripCommentRequest() {

@@ -1,5 +1,10 @@
 package com.kuanyu.blogdemo123.farmtrip.dto;
 
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+
 /**
  * 預約場次的「請求」DTO（會員送進來）。
  *
@@ -11,10 +16,22 @@ package com.kuanyu.blogdemo123.farmtrip.dto;
  */
 public class FarmTripOrderRequest {
 
+    @NotNull
     private Integer userId;
+
+    @NotNull
+    @Min(1)
     private Integer numPeople;
+
+    @NotBlank
+    @Size(max = 30)
     private String userName;
+
+    @NotBlank
+    @Size(max = 15)
     private String userPhoneNum;
+
+    @Size(max = 100)
     private String note;
 
     public FarmTripOrderRequest() {
