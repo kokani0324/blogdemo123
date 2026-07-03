@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
@@ -58,6 +59,7 @@ public class FarmTripServiceImpl implements FarmTripService {
     }
 
     @Override
+    @Transactional
     public FarmTripResponse createTrip(FarmTripRequest request) {
         FarmTrip trip = new FarmTrip();
         // DTO → entity：只搬前端該給的欄位
@@ -71,19 +73,35 @@ public class FarmTripServiceImpl implements FarmTripService {
         trip.setStatus(FarmTripStatus.PENDING);
         trip.setCommentNumbers(0);
         trip.setStarNumbers(0);
-        return FarmTripResponse.from(farmTripRepository.save(trip));
+        FarmTrip savedTrip = farmTripRepository.save(trip);
+
+        // 小農送出新活動時，立即建立一筆尚未指派管理員的待審核紀錄
+        createPendingAudit(savedTrip.getFarmTripId());
+
+        return FarmTripResponse.from(savedTrip);
     }
 
     @Override
+    @Transactional
     public FarmTripResponse updateTrip(Integer tripId, FarmTripRequest request) {
         FarmTrip db = getOrThrow(farmTripRepository.findById(tripId), "體驗活動不存在: " + tripId);
-        // 只開放可編輯欄位；status / farmerId / 評論統計 不讓前端覆蓋
+        if (db.getStatus() == FarmTripStatus.PENDING) {
+            throw new IllegalStateException("活動已在待審核中，不能重複送審: " + tripId);
+        }
+
+        // 只開放可編輯欄位；farmerId / 評論統計 不讓前端覆蓋
         db.setFarmTripType(request.getFarmTripType());
         db.setFarmTripTitle(request.getFarmTripTitle());
         db.setFarmTripIntro(request.getFarmTripIntro());
         db.setLocation(request.getLocation());
         db.setReferPrice(request.getReferPrice());
-        return FarmTripResponse.from(farmTripRepository.save(db));
+        db.setStatus(FarmTripStatus.PENDING);
+        FarmTrip savedTrip = farmTripRepository.save(db);
+
+        // 被拒絕或已上架的活動修改後重新送審，每次都保留一筆新的審核歷史
+        createPendingAudit(savedTrip.getFarmTripId());
+
+        return FarmTripResponse.from(savedTrip);
     }
 
     @Override
@@ -104,16 +122,22 @@ public class FarmTripServiceImpl implements FarmTripService {
     @Transactional
     public void auditTrip(Integer tripId, FarmTripAuditRequest request) {
         FarmTrip trip = getOrThrow(farmTripRepository.findById(tripId), "體驗活動不存在: " + tripId);
+        if (trip.getStatus() != FarmTripStatus.PENDING) {
+            throw new IllegalStateException("活動目前不是待審核狀態: " + tripId);
+        }
+        if (request.getStatus() == FarmTripAuditStatus.PENDING) {
+            throw new IllegalArgumentException("管理員只能選擇 APPROVED 或 REJECTED");
+        }
 
-        // 1) 寫一筆審核紀錄
-        LocalDateTime now = LocalDateTime.now();
-        FarmTripAudit audit = new FarmTripAudit();
-        audit.setFarmTripId(tripId);
+        // 1) 更新小農送審時建立的最新一筆 PENDING 紀錄
+        FarmTripAudit audit = getOrThrow(
+                farmTripAuditRepository.findFirstByFarmTripIdAndStatusOrderByCreatedAtDesc(
+                        tripId, FarmTripAuditStatus.PENDING),
+                "找不到待審核紀錄，活動編號: " + tripId);
         audit.setAdminId(request.getAdminId());
         audit.setStatus(request.getStatus());
         audit.setReason(request.getReason());
-        audit.setCreatedAt(now);
-        audit.setUpdatedAt(now);
+        audit.setUpdatedAt(LocalDateTime.now());
         farmTripAuditRepository.save(audit);
 
         // 2) 連動更新活動狀態：通過→上架(ACTIVE)，退回→REJECTED
@@ -165,7 +189,6 @@ public class FarmTripServiceImpl implements FarmTripService {
         db.setFarmTripEnd(request.getFarmTripEnd());
         db.setTripBookStart(request.getTripBookStart());
         db.setTripBookEnd(request.getTripBookEnd());
-        db.setAttendance(request.getAttendance());
         if (request.getSessionStatus() != null) {
             db.setSessionStatus(request.getSessionStatus());
         }
@@ -189,19 +212,6 @@ public class FarmTripServiceImpl implements FarmTripService {
             throw new IllegalStateException("此場次無法預約: " + sessionId);
         }
 
-        // 名額檢查：已確認(CONFIRMED)訂單的人數加總，不可超過場次上限
-        Integer cap = session.getAttendance();
-        int incoming = request.getNumPeople() == null ? 0 : request.getNumPeople();
-        if (cap != null) {
-            int booked = farmTripOrderRepository.findByFarmSessionId(sessionId).stream()
-                    .filter(o -> o.getStatus() == FarmTripOrderStatus.CONFIRMED)
-                    .mapToInt(o -> o.getNumPeople() == null ? 0 : o.getNumPeople())
-                    .sum();
-            if (booked + incoming > cap) {
-                throw new IllegalStateException("名額不足，剩餘 " + (cap - booked) + " 位");
-            }
-        }
-
         // DTO → entity
         FarmTripOrder order = new FarmTripOrder();
         order.setFarmSessionId(sessionId);
@@ -212,7 +222,24 @@ public class FarmTripServiceImpl implements FarmTripService {
         order.setNote(request.getNote());
         order.setStatus(FarmTripOrderStatus.CONFIRMED);
         order.setBookedAt(LocalDateTime.now());
-        return FarmTripOrderResponse.from(farmTripOrderRepository.save(order));
+        FarmTripOrder savedOrder = farmTripOrderRepository.save(order);
+
+        String bookingNo =
+                "FT"
+                        + savedOrder.getBookedAt()
+                        .format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+                        + "-"
+                        + String.format("%08d", savedOrder.getFarmTripOrderId());
+
+        savedOrder.setFarmTripOrderBookingNo(bookingNo);
+        farmTripOrderRepository.save(savedOrder);
+
+        // attendance 代表目前有效預約人數，由後端在預約成功後累加
+        int attendance = session.getAttendance() == null ? 0 : session.getAttendance();
+        session.setAttendance(attendance + request.getNumPeople());
+        farmTripSessionRepository.save(session);
+
+        return FarmTripOrderResponse.from(savedOrder);
     }
 
     @Override
@@ -231,6 +258,7 @@ public class FarmTripServiceImpl implements FarmTripService {
     }
 
     @Override
+    @Transactional
     public void cancelOrder(Integer orderId) {
         FarmTripOrder order = getOrThrow(farmTripOrderRepository.findById(orderId), "訂單不存在: " + orderId);
         if (order.getStatus() != FarmTripOrderStatus.CONFIRMED) {
@@ -239,7 +267,15 @@ public class FarmTripServiceImpl implements FarmTripService {
         order.setStatus(FarmTripOrderStatus.CANCELLED);
         order.setCancelledAt(LocalDateTime.now());
         farmTripOrderRepository.save(order);
-        // 取消後名額自然釋出：因為名額只計算 CONFIRMED 的訂單
+
+        // 取消已確認的訂單後，扣回該筆訂單原本計入的預約人數
+        FarmTripSession session = getOrThrow(
+                farmTripSessionRepository.findById(order.getFarmSessionId()),
+                "場次不存在: " + order.getFarmSessionId());
+        int attendance = session.getAttendance() == null ? 0 : session.getAttendance();
+        int cancelledPeople = order.getNumPeople() == null ? 0 : order.getNumPeople();
+        session.setAttendance(Math.max(0, attendance - cancelledPeople));
+        farmTripSessionRepository.save(session);
     }
 
     @Override
@@ -286,6 +322,19 @@ public class FarmTripServiceImpl implements FarmTripService {
 
     // ===== 小工具 =====
 
+    /** 小農每次送審時建立一筆新的待審核歷史；管理員審核前 adminId 保持 null */
+    private void createPendingAudit(Integer tripId) {
+        LocalDateTime now = LocalDateTime.now();
+        FarmTripAudit audit = new FarmTripAudit();
+        audit.setFarmTripId(tripId);
+        audit.setAdminId(null);
+        audit.setStatus(FarmTripAuditStatus.PENDING);
+        audit.setReason(null);
+        audit.setCreatedAt(now);
+        audit.setUpdatedAt(now);
+        farmTripAuditRepository.save(audit);
+    }
+
     /** SessionRequest DTO → entity（新增/批次共用；新增時沒帶狀態則預設 ACTIVE） */
     private FarmTripSession toSessionEntity(Integer tripId, FarmTripSessionRequest request) {
         FarmTripSession session = new FarmTripSession();
@@ -294,7 +343,7 @@ public class FarmTripServiceImpl implements FarmTripService {
         session.setFarmTripEnd(request.getFarmTripEnd());
         session.setTripBookStart(request.getTripBookStart());
         session.setTripBookEnd(request.getTripBookEnd());
-        session.setAttendance(request.getAttendance());
+        session.setAttendance(0);
         session.setSessionStatus(request.getSessionStatus() == null
                 ? FarmTripSessionStatus.ACTIVE : request.getSessionStatus());
         return session;

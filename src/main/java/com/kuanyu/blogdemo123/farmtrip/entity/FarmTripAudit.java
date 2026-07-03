@@ -21,7 +21,8 @@ public class FarmTripAudit implements java.io.Serializable {
     @Column(name = "farm_trip_id", nullable = false)
     private Integer farmTripId;
 
-    @Column(name = "admin_id", nullable = false)
+    /** 待審核時尚未指派管理員，因此允許為 null；做出審核決定後才寫入 */
+    @Column(name = "admin_id")
     private Integer adminId;
 
     @Enumerated(EnumType.STRING)

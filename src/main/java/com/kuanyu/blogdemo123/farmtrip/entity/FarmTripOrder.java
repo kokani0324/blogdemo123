@@ -25,7 +25,7 @@ public class FarmTripOrder implements java.io.Serializable {
     private Integer userId;
 
     /** 訂單編號 */
-    @Column(name = "farm_trip_order_booking_no", length = 30)
+    @Column(name = "farm_trip_order_booking_no", length = 30 , unique = true)
     private String farmTripOrderBookingNo;
 
     /** 報名人數 */

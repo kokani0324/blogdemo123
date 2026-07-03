@@ -37,9 +37,9 @@ public class FarmTripSession implements java.io.Serializable {
     @Column(name = "trip_book_end")
     private LocalDateTime tripBookEnd;
 
-    /** 名額上限 */
+    /** 目前有效預約人數 */
     @Column(name = "attendance")
-    private Integer attendance;
+    private Integer attendance = 0;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "session_status")

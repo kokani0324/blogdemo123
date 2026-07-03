@@ -49,7 +49,7 @@ Repository   只做「撈/存資料」：findBy... / save / delete
 |---|---|---|---|
 | `FarmTrip` | `farm_trip` | 體驗活動主體 | `farmerId` |
 | `FarmTripSession` | `farm_trip_session` | 場次 | `farmTripId` |
-| `FarmTripAudit` | `farm_trip_audits` | 審核紀錄 | `farmTripId`, `adminId` |
+| `FarmTripAudit` | `farm_trip_audits` | 審核紀錄 | `farmTripId`, `adminId`（待審時為 null） |
 | `FarmTripOrder` | `farm_trip_order` | 預約訂單 | `farmSessionId`, `userId` |
 | `FarmTripComment` | `farm_trip_comment` | 評論 | `farmTripId`, `userId` |
 
@@ -101,7 +101,7 @@ Repository   只做「撈/存資料」：findBy... / save / delete
 - `POST /admin/farm-trips/{tripId}/audit`
 - body 帶 `status`(APPROVED/REJECTED)、`reason`、`adminId`
 - **邏輯（兩步，包在同一個交易 `@Transactional`）**：
-  1. 寫一筆審核紀錄到 `farm_trip_audits`（自動補 `createdAt`/`updatedAt`）。
+  1. 找出小農送審時建立的最新一筆 `PENDING` 紀錄，寫入 `adminId`、結果、理由與 `updatedAt`。
   2. **連動**更新活動狀態：
      - `APPROVED` → 活動變 `ACTIVE`（上架）
      - `REJECTED` → 活動變 `REJECTED`（退回）
@@ -122,8 +122,8 @@ Repository   只做「撈/存資料」：findBy... / save / delete
 | API | 邏輯 |
 |---|---|
 | `GET /farmer/farm-trips?farmerId=` | 查自己的活動 → `findByFarmerId` |
-| `POST /farmer/farm-trips` | 新增活動，**後端強制** `status=PENDING`、評論統計歸零（見下方重點 A） |
-| `PUT /farmer/farm-trips/{tripId}` | 修改活動，**只開放可編輯欄位**（見下方重點 A） |
+| `POST /farmer/farm-trips` | 新增活動，強制 `status=PENDING`、統計歸零，並建立一筆待審紀錄 |
+| `PUT /farmer/farm-trips/{tripId}` | 修改活動後重新設為 `PENDING`，並建立下一輪待審紀錄；已待審時不可重複送出 |
 | `DELETE /farmer/farm-trips/{tripId}` | 刪除活動 |
 
 #### 場次 CRUD
@@ -176,47 +176,48 @@ Repository   只做「撈/存資料」：findBy... / save / delete
 
 這五條是體驗活動最有料、也最該理解的地方。
 
-### 重點 A：新增/修改活動時，「鎖死」敏感欄位
+### 重點 A：新增/修改活動時建立送審紀錄
 
 ```java
 // createTrip：新活動一律待審核、統計歸零
 trip.setStatus(FarmTripStatus.PENDING);
 trip.setCommentNumbers(0);
 trip.setStarNumbers(0);
+FarmTrip savedTrip = farmTripRepository.save(trip);
+createPendingAudit(savedTrip.getFarmTripId()); // adminId=null、status=PENDING
 ```
 
 **為什麼**：絕不信任前端傳來的 `status` 和統計值。否則前端可以直接傳 `status=ACTIVE` 繞過審核，或亂塞星數灌分。
 
-`updateTrip` 同理：只把 `title / intro / pic / location / referPrice / tripType` 這些可編輯欄位覆蓋回去，**`status`、`farmerId`、評論統計一律不動**。做法是先從資料庫撈出原本那筆，只改該改的欄位再存回去。
+`updateTrip` 只覆蓋 `title / intro / pic / location / referPrice / tripType` 等可編輯欄位，`farmerId` 與評論統計不讓前端改；儲存時由後端把活動改回 `PENDING`，再新增一筆待審紀錄。若活動本來已是 `PENDING`，則阻止重複送審。
 
 ---
 
-### 重點 B：預約場次的「名額檢查」⭐ 最複雜
+### 重點 B：預約成功後累加目前預約人數
 
 ```
 1) 場次要存在，且 sessionStatus = ACTIVE 才能預約（COMPLETED/CANCELLED 直接擋）
-2) 算目前已佔名額 = 該場次「所有 CONFIRMED 訂單的 numPeople 加總」
-3) 已佔 + 這次要預約人數 > 場次上限(attendance) → 丟「名額不足」例外
-4) 通過才建立訂單：status=CONFIRMED、bookedAt=現在
+2) 建立訂單：status=CONFIRMED、bookedAt=現在
+3) 場次 attendance += 這次訂單的 numPeople
 ```
 
-關鍵在**第 2 步只算 `CONFIRMED` 的訂單**。被取消的訂單因為狀態是 `CANCELLED`，自然不被算進去 → 帶出重點 C。
+`attendance` 代表目前有效預約人數，不是人數上限，也不由前端指定。新增場次時由後端設為 `0`。
 
-> 包 `@Transactional`：避免兩個人同時預約最後一個名額時，兩邊都算到「還有位子」而超賣。
+> 包 `@Transactional`：確保建立訂單與累加 `attendance` 要嘛一起成功，要嘛一起失敗。
 
 ---
 
-### 重點 C：取消預約，名額「自動」釋出
+### 重點 C：取消預約後扣回預約人數
 
 ```java
-// cancelOrder：只把狀態改掉，不需要手動「加回名額」
 order.setStatus(FarmTripOrderStatus.CANCELLED);
 order.setCancelledAt(LocalDateTime.now());
+
+int attendance = session.getAttendance() == null ? 0 : session.getAttendance();
+session.setAttendance(Math.max(0, attendance - order.getNumPeople()));
 ```
 
-**漂亮的地方**：因為名額計算（重點 B 第 2 步）只數 `CONFIRMED` 的訂單，一旦改成 `CANCELLED`，它就自動不佔名額了。**不需要另外寫一段「把名額加回去」的邏輯** → 少一段程式 = 少一個會出錯的地方。
-
-（測試已驗證：滿 5/5 後取消 2 人，再預約 2 人會成功。）
+只有原本為 `CONFIRMED` 的訂單能取消，因此每筆訂單最多只會從 `attendance` 扣除一次；`Math.max(0, ...)` 則避免舊資料不一致時出現負數。
 
 > 另外有擋：只有 `CONFIRMED` 的訂單能取消，已完成/已取消的不能再取消。
 
@@ -295,7 +296,7 @@ App 啟動成功（port 8080，連 `farmily` DB），以下皆通過：
 ### ⚠️ 已知限制 / 之後要補（誠實列出）
 1. **「目前登入者」尚未處理**：`farmerId`/`userId`/`adminId` 暫用 `@RequestParam` 或 DTO 帶。⚠️ 有登入機制後必須改成從 token/session 取得，**不能讓前端自己宣稱「我是 3 號小農」**（這是安全漏洞）。
 2. **權限未控管**：目前誰都能呼叫 admin 的審核 API。
-3. **例外處理粗糙**：商業邏輯錯誤（名額不足、找不到）目前會回 HTTP 500。建議加一個全域 `@RestControllerAdvice`，把「名額不足」→ 400、「找不到」→ 404，回應才漂亮。（欄位格式的錯誤已由 `@Valid` 處理成 400。）
+3. **例外處理粗糙**：商業邏輯錯誤（場次無法預約、找不到）目前會回 HTTP 500。建議加一個全域 `@RestControllerAdvice`，把「場次無法預約」→ 400、「找不到」→ 404，回應才漂亮。（欄位格式的錯誤已由 `@Valid` 處理成 400。）
 4. **刪除場次未防外鍵**：`DELETE /farmer/sessions/{id}` 若該場次底下已有訂單，會違反外鍵約束而報 500。應先檢查「有訂單就不准刪」或改為「軟刪除」（把 sessionStatus 設成 CANCELLED）。
 5. **沒有「查場次」公開 endpoint**：目前會員端看不到某活動的場次清單，預約前需要場次 id。之後應補一條 `GET /farm-trips/{id}/sessions`。
 6. **service 是 interface + impl 拆分**（參考專案是單一 class）。維持 blogdemo123 既有 `BlogService` 慣例，兩種皆可。
@@ -325,7 +326,7 @@ farmtrip/
 ├── repository/
 │   ├── FarmTripRepository.java          findByStatus / findByFarmerId
 │   ├── FarmTripSessionRepository.java   findByFarmTripId
-│   ├── FarmTripAuditRepository.java     findByFarmTripIdOrderByCreatedAtDesc
+│   ├── FarmTripAuditRepository.java     審核歷史 / 最新一筆 PENDING
 │   ├── FarmTripOrderRepository.java     findByUserId... / findByFarmSessionId / 【B方案 @Query】
 │   └── FarmTripCommentRepository.java   findByFarmTripIdOrderByCreatedAtDesc
 └── service/
